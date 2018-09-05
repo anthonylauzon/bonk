@@ -195,9 +195,9 @@ typedef struct _insig
 #endif
 #ifdef MSP
     void *g_outlet;             /* outlet for raw data */
-#endif
+#endif //MSP
     float *g_inbuf;             /* buffered input samples */
-    t_float *g_invec;           /* new input samples */
+    t_sample *g_invec;           /* new input samples */
 } t_insig;
 
 typedef struct _bonk
@@ -215,6 +215,7 @@ typedef struct _bonk
 	void *x_infoout;
     void *x_clock;
 #endif /* MSP */
+    
     /* parameters */
     int x_npoints;          /* number of points in input buffer */
     int x_period;           /* number of input samples between analyses */
@@ -260,12 +261,26 @@ typedef struct _bonk
 static void *bonk_new(t_symbol *s, long ac, t_atom *av);
 static void bonk_tick(t_bonk *x);
 static void bonk_doit(t_bonk *x);
+static void bonk_perform_generic(t_bonk *x, int n);
 static t_int *bonk_perform(t_int *w);
+static void bonk_perform64(t_bonk *x,
+                           t_object *dsp64,
+                           double **ins,
+                           long numins,
+                           double **outs,
+                           long numouts,
+                           long sampleframes,
+                           long flags,
+                           void *userparam);
 static void bonk_dsp(t_bonk *x, t_signal **sp);
+static void bonk_dsp64(t_bonk *x, t_object *dsp64,
+                       short *count,
+                       double samplerate, long maxvectorsize,
+                       long flags);
 void bonk_assist(t_bonk *x, void *b, long m, long a, char *s);
 static void bonk_free(t_bonk *x);
 void bonk_setup(void);
-int main();
+void ext_main(void *);
 
 static void bonk_thresh(t_bonk *x, t_floatarg f1, t_floatarg f2);
 static void bonk_print(t_bonk *x, t_floatarg f);
@@ -309,7 +324,7 @@ int snprintf(char *buffer, size_t count, char const *format, ...);
 #endif
 #endif
 
-#endif
+#endif // MSP
 
 static void bonk_tick(t_bonk *x);
 
@@ -431,7 +446,7 @@ static void bonk_freefilterbank(t_filterbank *b)
     int i;
     if (bonk_filterbanklist == b)
         bonk_filterbanklist = b->b_next;
-    else for (b2 = bonk_filterbanklist; b3 = b2->b_next; b2 = b3)
+    else for (b2 = bonk_filterbanklist; (b3 = b2->b_next); b2 = b3)
         if (b3 == b)
         {
             b2->b_next = b3->b_next;
@@ -668,9 +683,9 @@ static void bonk_tick(t_bonk *x)
         post("bonk out: number %d, vel %f, temperature %f",
              nfit, vel, temperature);
     
-    SETFLOAT(at2, nfit);
-    SETFLOAT(at2+1, vel);
-    SETFLOAT(at2+2, temperature);
+    A_SETFLOAT(at2, nfit);
+    A_SETFLOAT(at2+1, vel);
+    A_SETFLOAT(at2+2, temperature);
     outlet_list(x->x_cookedout, 0, 3, at2);
     
     for (n = 0, gp = x->x_insig + (ninsig-1),
@@ -805,10 +820,8 @@ static void bonk_doit(t_bonk *x)
     x->x_debouncevel *= x->x_debouncedecay;
 }
 
-static t_int *bonk_perform(t_int *w)
+static void bonk_perform_generic(t_bonk *x, int n)
 {
-    t_bonk *x = (t_bonk *)(w[1]);
-    int n = (int)(w[2]);
     int onset = 0;
     if (x->x_countdown >= n)
         x->x_countdown -= n;
@@ -830,7 +843,7 @@ static t_int *bonk_perform(t_int *w)
             for (i = 0, gp = x->x_insig; i < ninsig; i++, gp++)
             {
                 float *fp = gp->g_inbuf + infill;
-                t_float *in1 = gp->g_invec + onset;
+                t_sample *in1 = gp->g_invec + onset;
                 for (j = 0; j < m; j++)
                     *fp++ = *in1++;
             }
@@ -860,7 +873,34 @@ static t_int *bonk_perform(t_int *w)
             onset += m;
         }
     }
+}
+
+static t_int *bonk_perform(t_int *w)
+{
+    t_bonk *x = (t_bonk *)(w[1]);
+    int n = (int)(w[2]);
+    bonk_perform_generic(x, n);
     return (w+3);
+}
+static void bonk_perform64(t_bonk *x,
+                           t_object *dsp64,
+                           double **ins,
+                           long numins,
+                           double **outs,
+                           long numouts,
+                           long sampleframes,
+                           long flags,
+                           void *userparam)
+{
+        int n = sampleframes;
+    
+        int i = sampleframes, ninsig = x->x_ninsig;
+        t_insig *gp;
+    
+        for (i = 0, gp = x->x_insig; i < ninsig; i++, gp++)
+                gp->g_invec = ins[0];
+    
+            bonk_perform_generic(x, n);
 }
 
 static void bonk_dsp(t_bonk *x, t_signal **sp)
@@ -875,7 +915,13 @@ static void bonk_dsp(t_bonk *x, t_signal **sp)
     
     dsp_add(bonk_perform, 2, x, n);
 }
-
+static void bonk_dsp64(t_bonk *x, t_object *dsp64, short *count,
+                                              double samplerate, long maxvectorsize, long flags)
+{
+    
+       x->x_sr = samplerate;
+        object_method(dsp64, gensym("dsp_add64"), x, bonk_perform64, 0, NULL);
+}
 static void bonk_thresh(t_bonk *x, t_floatarg f1, t_floatarg f2)
 {
     if (f1 > f2)
@@ -1072,7 +1118,7 @@ static void bonk_read(t_bonk *x, t_symbol *s)
         ntemplate++;
     }
 nomore:
-    if (remaining = (ntemplate % x->x_ninsig))
+    if ((remaining = (ntemplate % x->x_ninsig)))
     {
         post("bonk_read: %d templates not a multiple of %d; dropping extras");
         x->x_template = (t_template *)t_resizebytes(x->x_template,
@@ -1095,7 +1141,7 @@ static void bonk_read(t_bonk *x, t_symbol *s)
 
 static void bonk_doread(t_bonk *x, t_symbol *s)
 {
-    long filetype = 'TEXT', outtype;
+    t_fourcc filetype = 'TEXT', outtype;
     char filename[512];
     short path;
     
@@ -1123,7 +1169,7 @@ static void bonk_openfile(t_bonk *x, char *filename, short path) {
     char **texthandle;
     char *tokptr;
     
-	long size;
+	t_ptr_size size;
 
     if (path_opensysfile(filename, path, &fh, READ_PERM)) {
         object_error((t_object *) x, "error opening %s", filename);
@@ -1166,9 +1212,11 @@ static void bonk_openfile(t_bonk *x, char *filename, short path) {
         } else {
             ntemplate++;
         }
+        
+        ntemplate++;
     }
 nomore:
-    if (remaining = (ntemplate % x->x_ninsig))
+    if ((remaining = (ntemplate % x->x_ninsig)))
     {
         post("bonk_read: %d templates not a multiple of %d; dropping extras");
         x->x_template = (t_template *)t_resizebytes(x->x_template,
@@ -1182,7 +1230,7 @@ nomore:
     x->x_ntemplate = ntemplate;
 	outlet_int(x->x_infoout, ntemplate);
 }
-#endif
+#endif //MSP
 
 #ifdef PD
 static void bonk_write(t_bonk *x, t_symbol *s)
@@ -1222,7 +1270,7 @@ static void bonk_write(t_bonk *x, t_symbol *s)
 
 static void bonk_dowrite(t_bonk *x, t_symbol *s)
 {
-    long filetype = 'TEXT', outtype;
+    t_fourcc filetype = 'TEXT', outtype;
     char filename[MAX_FILENAME_CHARS];
     short path;
     
@@ -1244,7 +1292,7 @@ void bonk_writefile(t_bonk *x, char *filename, short path)
     t_template *tp = x->x_template;
     float *fp;
     long err;
-    long buflen;
+    t_ptr_size buflen;
     
     t_filehandle fh;
     
@@ -1268,7 +1316,8 @@ void bonk_writefile(t_bonk *x, char *filename, short path)
         
     sysfile_close(fh);
 }
-#endif
+
+#endif //MSP
 
 static void bonk_free(t_bonk *x)
 {
@@ -1433,14 +1482,12 @@ void bonk_tilde_setup(void)
                     gensym("write"), A_SYMBOL, 0);
     class_addmethod(bonk_class, (t_method)bonk_usekdtree,
                     gensym("usekdtree"), A_DEFFLOAT, 0);
-    post("bonk version 1.3");
+    post("bonk version 1.4");
 }
 #endif
 
-/* -------------------------- MSP glue ------------------------- */
 #ifdef MSP
-
-int main()
+void ext_main(void *r)
 {       
     t_class *c;
     t_object *attr;
@@ -1512,6 +1559,7 @@ int main()
     class_addattr(c, attr);
 
     class_addmethod(c, (method)bonk_dsp, "dsp", A_CANT, 0);
+    class_addmethod(c, (method)bonk_dsp64, "dsp64", A_CANT, 0);
     class_addmethod(c, (method)bonk_bang, "bang", A_CANT, 0);
     class_addmethod(c, (method)bonk_forget, "forget", 0);
     class_addmethod(c, (method)bonk_thresh, "thresh", A_FLOAT, A_FLOAT, 0);
@@ -1528,8 +1576,8 @@ int main()
     class_register(CLASS_BOX, c);
     bonk_class = c;
     
-    post("bonk~ v1.3");
-    return (0);
+    post("bonk~ v1.4");
+
 }
 
 static void *bonk_new(t_symbol *s, long ac, t_atom *av)
@@ -1537,7 +1585,7 @@ static void *bonk_new(t_symbol *s, long ac, t_atom *av)
     short j;
     t_bonk *x;
     
-    if (x = (t_bonk *)object_alloc((t_class *) bonk_class)) {
+    if ((x = (t_bonk *)object_alloc(bonk_class))) {
         
         t_insig *g;
         
@@ -1603,6 +1651,8 @@ static void *bonk_new(t_symbol *s, long ac, t_atom *av)
             g->g_outlet = listout((t_object *)x);
         }
         
+		
+
         x->x_clock = clock_new(x, (method)bonk_tick);
         
         bonk_donew(x, x->x_npoints, x->x_period, x->x_ninsig, x->x_nfilters,
@@ -1714,8 +1764,7 @@ void bonk_learn_set(t_bonk *x, void *attr, long ac, t_atom *av)
             x->x_ntemplate = 0;
 			kd_clear((struct kdtree *) x->kd);
         }
-        x->x_learn = (n != 0);
-        x->x_learnnum = n;
+        x->x_learn = n;
         x->x_learncount = 0;
     }
 }
@@ -1757,4 +1806,5 @@ float qrsqrt(float f)
 {
     return 1/sqrt(f);
 }
-#endif /* MSP */
+
+#endif //MSP

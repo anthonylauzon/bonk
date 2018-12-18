@@ -19,7 +19,7 @@ MSP = 1
 C74SUPPORT = $(PROJECT_DIR)/../max-sdk-7.3.3/source/c74support
 HEADER_SEARCH_PATHS = "$(C74SUPPORT)/max-includes" "$(C74SUPPORT)/msp-includes" "$(C74SUPPORT)/jit-includes"
 FRAMEWORK_SEARCH_PATHS = "$(C74SUPPORT)/max-includes" "$(C74SUPPORT)/msp-includes" "$(C74SUPPORT)/jit-includes"
-DSTROOT = /Users/adl/src/max-sdk-7.3.3/externals
+DSTROOT = $(PROJECT_DIR)/build
 // (This next path is relative to DSTROOT)
 INSTALL_PATH = /
 
